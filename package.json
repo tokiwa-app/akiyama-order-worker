@@ -1,5 +1,5 @@
 {
-  "name": "akiyama-order",
+  "name": "akiyama-order-worker",
   "version": "1.0.0",
   "type": "module",
   "main": "index.js",
@@ -8,15 +8,10 @@
   },
   "dependencies": {
     "express": "^4.18.2",
-    "googleapis": "^133.0.0",
     "@google-cloud/firestore": "^7.10.0",
     "@google-cloud/storage": "^7.12.1",
-    "@google-cloud/tasks": "^6.2.0",
     "@google-cloud/vision": "^4.3.3",
-    "p-limit": "^4.0.0",
-
     "@supabase/supabase-js": "^2.0.0",
-    "puppeteer": "^22.7.1",
-    "mailparser": "^3.7.1"
+    "puppeteer": "^22.7.1"
   }
 }

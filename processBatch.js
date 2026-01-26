@@ -53,7 +53,7 @@ export function registerProcessBatchRoutes(app, deps) {
           let mainPdfPath = null;
 
           if (m.message_type === "fax") {
-            const { data: pdfRows, error: pdfErr } = await supabase
+            const { data: pdfRows, error: pdfErr } = 
               .from("message_main_pdf_files")
               .select("gcs_path")
               .eq("message_id", m.id)
@@ -64,7 +64,7 @@ export function registerProcessBatchRoutes(app, deps) {
             attachments = (pdfRows || []).map((r) => r.gcs_path).filter(Boolean);
             mainPdfPath = attachments[0] || null;
           } else {
-            const { data: attRows, error: attErr } = await supabase
+            const { data: attRows, error: attErr } = 
               .from("message_attachments")
               .select("gcs_path")
               .eq("message_id", m.id);
@@ -90,7 +90,7 @@ export function registerProcessBatchRoutes(app, deps) {
                     mainPdfPath = rendered;
 
                     // message_main_pdf_files に登録（mail_rendered）
-                    await supabase.from("message_main_pdf_files").insert({
+                    .from("message_main_pdf_files").insert({
                       case_id: m.case_id,
                       message_id: m.id,
                       gcs_path: mainPdfPath,
@@ -145,7 +145,7 @@ export function registerProcessBatchRoutes(app, deps) {
             .from("messages")
             .update({
               main_pdf_path: mainPdfPath ?? null,
-              ocr_text: ocrText,
+              body_text: ocrText,
               customer_id: customer?.id ?? 0,
               customer_name: customer?.name ??  "未設定",
               ocr_status: "done",

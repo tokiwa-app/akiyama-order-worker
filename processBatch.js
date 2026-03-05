@@ -7,7 +7,7 @@ import fs from "fs/promises";
 /**
  * pending を少量処理
  * - messages から未処理を取ってロック
- * - fax: message_main_pdf_files からPDF取得 → OCR → 顧客特定 → cases/messages 更新
+ * - fax: message_main_pdf_files からPDF取得 → OCR → (NO:AKxxxxxxx があれば case_id を付け替え) → 顧客特定 → cases/messages 更新
  * - mail: body_text/body_html(+ヘッダ)で顧客特定、必要なら HTML→PDF 生成して main に設定
  * - thumbnail: PDF/HTML を JPEG サムネにして message_main_pdf_files.thumbnail_path に保存
  */
@@ -142,6 +142,37 @@ export function registerProcessBatchRoutes(app, deps) {
             // fax: PDF OCR
             ocrText = await runOcrForAttachments(attachments);
 
+            // ★追加：NO:AKxxxxxxx を OCR から抽出して case_id を自動復帰
+            // previous_case_id は「最初の案件」として固定したいので、ここでは触らない
+            const akDigits7 = extractCaseIdFromOcr(ocrText);
+            if (akDigits7) {
+              const akCaseId = Number(akDigits7); // "0000001" -> 1
+              if (Number.isFinite(akCaseId)) {
+                const { data: caseRow, error: caseSelErr } = await supabase
+                  .from("cases")
+                  .select("id")
+                  .eq("id", akCaseId)
+                  .maybeSingle();
+
+                if (caseSelErr) {
+                  console.error("case lookup error:", caseSelErr);
+                } else if (caseRow?.id) {
+                  // message の紐付けを AK の案件へ
+                  const { error: updCaseErr } = await supabase
+                    .from("messages")
+                    .update({ case_id: akCaseId })
+                    .eq("id", m.id);
+
+                  if (updCaseErr) {
+                    console.error("update message.case_id by AK failed:", updCaseErr);
+                  } else {
+                    m.case_id = akCaseId; // 後続処理（cases更新等）で使う
+                    console.log("AK detected => relinked message to case:", akCaseId, "msg:", m.id);
+                  }
+                }
+              }
+            }
+
             const head = String(ocrText || "").slice(0, 200);
             customer =
               (head && (await detectCustomerFromMaster(head))) ||
@@ -270,6 +301,28 @@ function parseGsPath(gsPath) {
   return { bucketName: m[1], objectPath: m[2] };
 }
 
+/**
+ * OCRテキストから「NO：AK0000001」系を拾って 7桁を返す
+ * - NO / N0 / No / NO. などの揺れを許容
+ * - 誤読(O/I/l) を補正
+ * - 返り値は "0000001" のような 7桁文字列
+ */
+function extractCaseIdFromOcr(text) {
+  if (!text) return null;
+
+  // N[O0] で NO / N0 を吸収、区切りは :：. を許容、空白も許容
+  const m = String(text).match(/N[O0]\s*[:：.]?\s*AK\s*([0-9OIl]{7})/i);
+  if (!m) return null;
+
+  let s = String(m[1] || "").toUpperCase();
+  // 誤読補正
+  s = s.replace(/O/g, "0").replace(/[IL]/g, "1");
+
+  // 最終チェック：7桁数字にできるならOK
+  if (!/^\d{7}$/.test(s)) return null;
+  return s;
+}
+
 async function launchBrowser() {
   // Cloud Runで安定させるなら executablePath を環境変数で指定するのが安全
   // 例: PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
@@ -310,7 +363,7 @@ async function renderMailHtmlToPdfToGcs({ bucket, messageId, html }) {
   }
 }
 
-/* ================= HTML/MTML → JPEG（サムネ） ================= */
+/* ================= HTML → JPEG（サムネ） ================= */
 
 async function renderHtmlToJpegToGcs({ bucket, messageId, html }) {
   if (!bucket) throw new Error("GCS bucket is not configured");

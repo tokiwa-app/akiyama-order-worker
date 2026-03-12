@@ -302,23 +302,19 @@ function parseGsPath(gsPath) {
 }
 
 /**
- * OCRテキストから「NO：AK0000001」系を拾って 7桁を返す
- * - NO / N0 / No / NO. などの揺れを許容
+ * OCRテキストから「AK0000001S」系を拾って 7桁を返す
  * - 誤読(O/I/l) を補正
  * - 返り値は "0000001" のような 7桁文字列
  */
 function extractCaseIdFromOcr(text) {
   if (!text) return null;
 
-  // N[O0] で NO / N0 を吸収、区切りは :：. を許容、空白も許容
-  const m = String(text).match(/N[O0]\s*[:：.]?\s*AK\s*([0-9OIl]{7})/i);
+  const m = String(text).match(/AK\s*([0-9OIl]{7})\s*[S5]/i);
   if (!m) return null;
 
   let s = String(m[1] || "").toUpperCase();
-  // 誤読補正
   s = s.replace(/O/g, "0").replace(/[IL]/g, "1");
 
-  // 最終チェック：7桁数字にできるならOK
   if (!/^\d{7}$/.test(s)) return null;
   return s;
 }

@@ -181,6 +181,19 @@ export function registerProcessBatchRoutes(app, deps) {
             }
           }
 
+          // cases更新（従来通り）
+          if (m.case_id && (customer?.id || customer?.name)) {
+            await supabase
+              .from("cases")
+              .update({
+                customer_id: customer?.id ?? 0,
+                customer_name: customer?.name ?? "未設定",
+                latest_message_at: m.received_at ?? null,
+                title: m.subject ?? null,
+              })
+              .eq("id", m.case_id);
+          }
+          
           // messages 更新
           // 注意: mail の body_text を ocrText(空)で上書きしない
           const updatePayload = {

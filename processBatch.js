@@ -7,7 +7,7 @@ import fs from "fs/promises";
 /**
  * pending を少量処理
  * - messages から未処理を取ってロック
- * - fax: message_main_pdf_files からPDF取得 → OCR → (NO:AKxxxxxxx があれば case_id を付け替え) → 顧客特定 → cases/messages 更新
+ * - fax: message_main_pdf_files からPDF取得 → OCR → 顧客特定 → messages 更新 → 最後に AK0000001S があれば messages.case_id のみ付け替え
  * - mail: body_text/body_html(+ヘッダ)で顧客特定、必要なら HTML→PDF 生成して main に設定
  * - thumbnail: PDF/HTML を JPEG サムネにして message_main_pdf_files.thumbnail_path に保存
  */
@@ -142,37 +142,6 @@ export function registerProcessBatchRoutes(app, deps) {
             // fax: PDF OCR
             ocrText = await runOcrForAttachments(attachments);
 
-            // ★追加：NO:AKxxxxxxx を OCR から抽出して case_id を自動復帰
-            // previous_case_id は「最初の案件」として固定したいので、ここでは触らない
-            const akDigits7 = extractCaseIdFromOcr(ocrText);
-            if (akDigits7) {
-              const akCaseId = Number(akDigits7); // "0000001" -> 1
-              if (Number.isFinite(akCaseId)) {
-                const { data: caseRow, error: caseSelErr } = await supabase
-                  .from("cases")
-                  .select("id")
-                  .eq("id", akCaseId)
-                  .maybeSingle();
-
-                if (caseSelErr) {
-                  console.error("case lookup error:", caseSelErr);
-                } else if (caseRow?.id) {
-                  // message の紐付けを AK の案件へ
-                  const { error: updCaseErr } = await supabase
-                    .from("messages")
-                    .update({ case_id: akCaseId })
-                    .eq("id", m.id);
-
-                  if (updCaseErr) {
-                    console.error("update message.case_id by AK failed:", updCaseErr);
-                  } else {
-                    m.case_id = akCaseId; // 後続処理（cases更新等）で使う
-                    console.log("AK detected => relinked message to case:", akCaseId, "msg:", m.id);
-                  }
-                }
-              }
-            }
-
             const head = String(ocrText || "").slice(0, 200);
             customer =
               (head && (await detectCustomerFromMaster(head))) ||
@@ -212,19 +181,6 @@ export function registerProcessBatchRoutes(app, deps) {
             }
           }
 
-          // cases 更新（顧客が取れた場合）
-          if (m.case_id && (customer?.id || customer?.name)) {
-            await supabase
-              .from("cases")
-              .update({
-                customer_id: customer?.id ?? 0,
-                customer_name: customer?.name ?? "未設定",
-                latest_message_at: m.received_at ?? null,
-                title: m.subject ?? null,
-              })
-              .eq("id", m.case_id);
-          }
-
           // messages 更新
           // 注意: mail の body_text を ocrText(空)で上書きしない
           const updatePayload = {
@@ -240,7 +196,6 @@ export function registerProcessBatchRoutes(app, deps) {
           if (m.message_type === "fax") {
             updatePayload.body_text = ocrText || "";
             updatePayload.body_type = "ocr_pdf";
-            // OCR結果も残したいなら（スキーマに ocr_text がある場合）
             updatePayload.ocr_text = ocrText || "";
           }
 
@@ -250,6 +205,43 @@ export function registerProcessBatchRoutes(app, deps) {
             .eq("id", m.id);
 
           if (updErr) throw updErr;
+
+          // ★最後に AK0000001S を OCR から抽出して messages.case_id のみ更新
+          if (m.message_type === "fax") {
+            const akDigits7 = extractCaseIdFromOcr(ocrText);
+
+            if (akDigits7) {
+              const akCaseId = Number(akDigits7); // "0000001" -> 1
+
+              if (Number.isFinite(akCaseId) && akCaseId > 0) {
+                const { data: caseRow, error: caseSelErr } = await supabase
+                  .from("cases")
+                  .select("id")
+                  .eq("id", akCaseId)
+                  .maybeSingle();
+
+                if (caseSelErr) {
+                  console.error("case lookup error:", caseSelErr);
+                } else if (caseRow?.id) {
+                  const { error: updCaseErr } = await supabase
+                    .from("messages")
+                    .update({ case_id: akCaseId })
+                    .eq("id", m.id);
+
+                  if (updCaseErr) {
+                    console.error("update message.case_id by AK failed:", updCaseErr);
+                  } else {
+                    console.log(
+                      "AK detected => relinked message.case_id only:",
+                      akCaseId,
+                      "msg:",
+                      m.id
+                    );
+                  }
+                }
+              }
+            }
+          }
 
           processed++;
         } catch (e) {
@@ -320,8 +312,6 @@ function extractCaseIdFromOcr(text) {
 }
 
 async function launchBrowser() {
-  // Cloud Runで安定させるなら executablePath を環境変数で指定するのが安全
-  // 例: PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
   const executablePath = process.env.PUPPETEER_EXECUTABLE_PATH || undefined;
 
   return puppeteer.launch({
@@ -403,7 +393,6 @@ async function renderPdfFirstPageToJpegToGcs({ bucket, gcsPdfPath, messageId }) 
 
   const tmpPdf = path.join(os.tmpdir(), `${safeId}.pdf`);
 
-  // src bucket（同一なら bucket を使い回し）
   const srcBucket =
     bucket.name === bucketName ? bucket : bucket.storage.bucket(bucketName);
 
@@ -414,7 +403,6 @@ async function renderPdfFirstPageToJpegToGcs({ bucket, gcsPdfPath, messageId }) 
     const page = await browser.newPage();
     await page.setViewport({ width: 1200, height: 1600 });
 
-    // PDFを file:// で開いてスクショ（1ページ目）
     await page.goto(`file://${tmpPdf}`, { waitUntil: "networkidle0" });
 
     const jpegBuffer = await page.screenshot({

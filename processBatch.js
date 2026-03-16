@@ -105,7 +105,7 @@ export function registerProcessBatchRoutes(app, deps) {
           // =========================
           // cases 更新
           // =========================
-          if (m.case_id && (customer?.id || customer?.name)) {
+          if (m.case_id) {
             await supabase
               .from("cases")
               .update({
